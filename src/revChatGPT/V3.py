@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from importlib.resources import path
+from pathlib import Path
 from typing import AsyncGenerator
 from typing import NoReturn
 
@@ -13,12 +14,27 @@ import httpx
 import requests
 import tiktoken
 
+from . import __version__
 from . import typings as t
 from .utils import create_completer
 from .utils import create_keybindings
 from .utils import create_session
 from .utils import get_filtered_keys_from_object
 from .utils import get_input
+
+ENGINES = [
+    "gpt-3.5-turbo",
+    "gpt-3.5-turbo-16k",
+    "gpt-3.5-turbo-0301",
+    "gpt-3.5-turbo-0613",
+    "gpt-3.5-turbo-16k-0613",
+    "gpt-4",
+    "gpt-4-0314",
+    "gpt-4-32k",
+    "gpt-4-32k-0314",
+    "gpt-4-0613",
+    "gpt-4-32k-0613",
+]
 
 
 class Chatbot:
@@ -38,6 +54,7 @@ class Chatbot:
         presence_penalty: float = 0.0,
         frequency_penalty: float = 0.0,
         reply_count: int = 1,
+        truncate_limit: int = None,
         system_prompt: str = "You are ChatGPT, a large language model trained by OpenAI. Respond conversationally",
     ) -> None:
         """
@@ -47,10 +64,22 @@ class Chatbot:
         self.api_key: str = api_key
         self.system_prompt: str = system_prompt
         self.max_tokens: int = max_tokens or (
-            31000 if engine == "gpt-4-32k" else 7000 if engine == "gpt-4" else 4000
+            31000
+            if "gpt-4-32k" in engine
+            else 7000
+            if "gpt-4" in engine
+            else 15000
+            if "gpt-3.5-turbo-16k" in engine
+            else 4000
         )
-        self.truncate_limit: int = (
-            30500 if engine == "gpt-4-32k" else 6500 if engine == "gpt-4" else 3500
+        self.truncate_limit: int = truncate_limit or (
+            30500
+            if "gpt-4-32k" in engine
+            else 6500
+            if "gpt-4" in engine
+            else 14500
+            if "gpt-3.5-turbo-16k" in engine
+            else 3500
         )
         self.temperature: float = temperature
         self.top_p: float = top_p
@@ -66,10 +95,9 @@ class Chatbot:
                 "https": proxy,
             },
         )
-        proxy = (
+        if proxy := (
             proxy or os.environ.get("all_proxy") or os.environ.get("ALL_PROXY") or None
-        )
-        if proxy:
+        ):
             if "socks5h" not in proxy:
                 self.aclient = httpx.AsyncClient(
                     follow_redirects=True,
@@ -125,15 +153,8 @@ class Chatbot:
         """
         Get token count
         """
-        if self.engine not in [
-            "gpt-3.5-turbo",
-            "gpt-3.5-turbo-0301",
-            "gpt-4",
-            "gpt-4-0314",
-            "gpt-4-32k",
-            "gpt-4-32k-0314",
-        ]:
-            raise NotImplementedError("Unsupported engine {self.engine}")
+        if self.engine not in ENGINES:
+            raise NotImplementedError(f"Unsupported engine {self.engine}")
 
         tiktoken.model.MODEL_TO_ENCODING["gpt-4"] = "cl100k_base"
 
@@ -201,7 +222,7 @@ class Chatbot:
             raise t.APIConnectionError(
                 f"{response.status_code} {response.reason} {response.text}",
             )
-        response_role: str = None
+        response_role: str or None = None
         full_response: str = ""
         for line in response.iter_lines():
             if not line:
@@ -369,7 +390,7 @@ class Chatbot:
                 indent=2,
             )
 
-    def load(self, file: str, *keys_: str) -> None:
+    def load(self, file: Path, *keys_: str) -> None:
         """
         Load the Chatbot configuration from a JSON file
         """
@@ -511,9 +532,10 @@ def main() -> NoReturn:
     Main function
     """
     print(
-        """
+        f"""
     ChatGPT - Official ChatGPT API
     Repo: github.com/acheong08/ChatGPT
+    Version: {__version__}
     """,
     )
     print("Type '!help' to show a full list of commands")
@@ -583,7 +605,13 @@ def main() -> NoReturn:
         "--model",
         type=str,
         default="gpt-3.5-turbo",
-        choices=["gpt-3.5-turbo", "gpt-4", "gpt-4-32k"],
+        choices=ENGINES,
+    )
+
+    parser.add_argument(
+        "--truncate_limit",
+        type=int,
+        default=None,
     )
 
     args, _ = parser.parse_known_args()
@@ -605,11 +633,12 @@ def main() -> NoReturn:
             top_p=args.top_p,
             reply_count=args.reply_count,
             engine=args.model,
+            truncate_limit=args.truncate_limit,
         )
     # Check if internet is enabled
     if args.enable_internet:
         config = path("revChatGPT", "config").__str__()
-        chatbot.load(os.path.join(config, "enable_internet.json"), "conversation")
+        chatbot.load(Path(config, "enable_internet.json"), "conversation")
 
     session = create_session()
     completer = create_completer(
